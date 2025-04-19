@@ -1,0 +1,18 @@
+# Environment files
+app/.env
+virtualenv/
+
+# Embedding & model files
+app/movement_embedding.txt
+app/insightface_model/
+
+# Bytecode and cache
+__pycache__/
+*.pyc
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+app/.streamlit/secrets.toml
+app/.streamlit/
