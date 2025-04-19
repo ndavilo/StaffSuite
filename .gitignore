@@ -16,3 +16,4 @@ Thumbs.db
 
 app/.streamlit/secrets.toml
 app/.streamlit/
+.gitignore
