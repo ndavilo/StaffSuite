@@ -91,13 +91,24 @@ def load_data_from_redis():
             log = log.decode('utf-8')
         log = log.strip("b'")
         parts = log.split('@')
-        if len(parts) == 4:
-            file_name_role, role, timestamp, Clock_In_Out = parts
+        if len(parts) >= 4:  # Updated to handle both old and new formats
+            # Extract name and role (first two parts)
+            file_name_role = parts[0]
+            role = parts[1]
+            timestamp = parts[-2]  # Second last part is timestamp
+            Clock_In_Out = parts[-1]  # Last part is action
+            
+            # Handle zone if present (parts[2] would be zone in new format)
+            zone = 'Lagos Zone 2'  # Default if not specified
+            if len(parts) == 5:  # New format with zone
+                zone = parts[2]
+            
             file_no, name = file_name_role.split('.', 1)
             cleaned_logs.append({
                 'File No.': file_no,
                 'Name': name,
                 'Role': role,
+                'Zone': zone,  # Added zone
                 'Timestamp': timestamp,
                 'Clock_In_Out': Clock_In_Out
             })
@@ -135,10 +146,25 @@ def main():
 
     # Sidebar filters
     st.sidebar.header('Filter Options')
+    
+    # Zone filter (add this first)
+    available_zones = ['All Zones'] + sorted(df['Zone'].unique().tolist())
+    selected_zone = st.sidebar.selectbox(
+        'Select Zone',
+        options=available_zones,
+        index=0,
+        help="Filter by staff zone"
+    )
+    
+    # Role filter (modified to work with zone filter)
+    role_options = df['Role'].unique()
+    if selected_zone != 'All Zones':
+        role_options = df[df['Zone'] == selected_zone]['Role'].unique()
+    
     selected_roles = st.sidebar.multiselect(
         'Select Roles', 
-        options=df['Role'].unique(), 
-        default=df['Role'].unique(),
+        options=role_options, 
+        default=role_options,
         help="Filter by staff roles"
     )
     
@@ -151,18 +177,30 @@ def main():
     )
 
     # Filter data
-    filtered_df = df[(df['Role'].isin(selected_roles)) & (df['Date'] >= date_range[0]) & (df['Date'] <= date_range[1])]
+    filtered_df = df[
+        (df['Role'].isin(selected_roles)) & 
+        (df['Date'] >= date_range[0]) & 
+        (df['Date'] <= date_range[1])
+    ]
+    
+    # Apply zone filter if not 'All Zones'
+    if selected_zone != 'All Zones':
+        filtered_df = filtered_df[filtered_df['Zone'] == selected_zone]
     
     st.write(f"Displaying data from {date_range[0]} to {date_range[1]}")
 
-    # Metrics row
-    col1, col2, col3 = st.columns(3)
+    # Metrics row - updated to 4 columns
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Total Records", len(filtered_df))
     with col2:
         st.metric("Unique Employees", filtered_df['Name'].nunique())
     with col3:
         st.metric("Date Range", f"{filtered_df['Date'].min()} to {filtered_df['Date'].max()}")
+    with col4:
+        zones = filtered_df['Zone'].unique()
+        zone_text = ', '.join(zones) if len(zones) <= 2 else f"{len(zones)} zones"
+        st.metric("Zones", zone_text)
 
     # Tabs for different views
     tab1, tab3 = st.tabs(["Daily Activity", "Hourly Trends"])
@@ -170,9 +208,24 @@ def main():
     with tab1:
         st.subheader("Daily Attendance Activity")
         if not filtered_df.empty:
-            daily_counts = filtered_df.groupby(['Date', 'Clock_In_Out']).size().unstack(fill_value=0)
+            # Include zone in grouping if multiple zones selected
+            if selected_zone == 'All Zones':
+                group_cols = ['Date', 'Zone', 'Clock_In_Out']
+            else:
+                group_cols = ['Date', 'Clock_In_Out']
+                
+            daily_counts = filtered_df.groupby(group_cols).size().unstack(fill_value=0)
+            
             fig, ax = plt.subplots(figsize=(10, 6))
-            daily_counts.plot(kind='bar', stacked=True, ax=ax)
+            if selected_zone == 'All Zones':
+                # Plot each zone separately
+                for zone in daily_counts.index.get_level_values('Zone').unique():
+                    zone_data = daily_counts.xs(zone, level='Zone')
+                    zone_data.plot(kind='bar', stacked=True, ax=ax, label=zone)
+                plt.legend(title='Zone')
+            else:
+                daily_counts.plot(kind='bar', stacked=True, ax=ax)
+                
             plt.title('Daily Clock-Ins and Clock-Outs')
             plt.xlabel('Date')
             plt.ylabel('Count')
@@ -180,11 +233,26 @@ def main():
             st.pyplot(fig)
 
             st.subheader("Activity by Day of Week")
-            day_counts = filtered_df.groupby(['Day', 'Clock_In_Out']).size().unstack(fill_value=0)
+            if selected_zone == 'All Zones':
+                group_cols = ['Day', 'Zone', 'Clock_In_Out']
+            else:
+                group_cols = ['Day', 'Clock_In_Out']
+                
+            day_counts = filtered_df.groupby(group_cols).size().unstack(fill_value=0)
             day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-            day_counts = day_counts.reindex(day_order)
+            
             fig, ax = plt.subplots(figsize=(10, 4))
-            day_counts.plot(kind='bar', stacked=True, ax=ax)
+            if selected_zone == 'All Zones':
+                # Plot each zone separately
+                for zone in day_counts.index.get_level_values('Zone').unique():
+                    zone_data = day_counts.xs(zone, level='Zone')
+                    zone_data = zone_data.reindex(day_order)
+                    zone_data.plot(kind='bar', stacked=True, ax=ax, label=zone)
+                plt.legend(title='Zone')
+            else:
+                day_counts = day_counts.reindex(day_order)
+                day_counts.plot(kind='bar', stacked=True, ax=ax)
+                
             plt.title('Activity by Day of Week')
             plt.xlabel('Day')
             plt.ylabel('Count')
@@ -196,9 +264,24 @@ def main():
     with tab3:
         st.subheader("Hourly Activity Trends")
         if not filtered_df.empty:
-            hourly_dist = filtered_df.groupby(['Hour', 'Clock_In_Out']).size().unstack(fill_value=0)
+            # Add zone to the grouping if multiple zones are selected
+            if selected_zone == 'All Zones':
+                group_cols = ['Zone', 'Hour', 'Clock_In_Out']
+            else:
+                group_cols = ['Hour', 'Clock_In_Out']
+                
+            hourly_dist = filtered_df.groupby(group_cols).size().unstack(fill_value=0)
+            
             fig, ax = plt.subplots(figsize=(10, 4))
-            hourly_dist.plot(kind='area', stacked=True, ax=ax)
+            if selected_zone == 'All Zones':
+                # Plot each zone separately
+                for zone in hourly_dist.index.get_level_values(0).unique():
+                    zone_data = hourly_dist.xs(zone, level='Zone')
+                    zone_data.plot(kind='area', stacked=True, ax=ax, label=zone)
+                plt.legend(title='Zone')
+            else:
+                hourly_dist.plot(kind='area', stacked=True, ax=ax)
+                
             plt.title('Hourly Activity Distribution')
             plt.xlabel('Hour of Day')
             plt.ylabel('Count')
@@ -206,7 +289,12 @@ def main():
             st.pyplot(fig)
 
             st.subheader("Role-Specific Hourly Patterns")
-            role_hourly = filtered_df.groupby(['Role', 'Hour']).size().unstack(fill_value=0)
+            if selected_zone == 'All Zones':
+                group_cols = ['Role', 'Zone', 'Hour']
+            else:
+                group_cols = ['Role', 'Hour']
+                
+            role_hourly = filtered_df.groupby(group_cols).size().unstack(fill_value=0)
             fig, ax = plt.subplots(figsize=(12, 6))
             sns.heatmap(role_hourly, cmap='YlOrRd', ax=ax)
             plt.title('Role Activity by Hour (Darker = More Activity)')

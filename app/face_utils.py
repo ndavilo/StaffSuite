@@ -17,7 +17,6 @@ hostname = st.secrets["REDIS_HOST"]  # If using Streamlit
 portnumber = st.secrets["REDIS_PORT"]
 password = st.secrets["REDIS_PASSWORD"]
 
-
 r = redis.StrictRedis(host=hostname, port=portnumber, password=password)
 
 def retrive_data(name):
@@ -29,8 +28,37 @@ def retrive_data(name):
     retrive_series.index = index
     retrive_df = retrive_series.to_frame().reset_index()
     retrive_df.columns = ['ID_Name_Role', 'Facial_features']
-    retrive_df[['File No. Name', 'Role']] = retrive_df['ID_Name_Role'].apply(lambda x: x.split('@')).apply(pd.Series)
-    return retrive_df[['File No. Name', 'Role', 'Facial_features']]
+    
+    # Initialize default values
+    retrive_df['File No. Name'] = ''
+    retrive_df['Role'] = ''
+    retrive_df['Zone'] = 'Lagos Zone 2'  # Default zone
+    
+    # Process each record safely
+    for i, row in retrive_df.iterrows():
+        try:
+            parts = row['ID_Name_Role'].split('@')
+            
+            # Extract file no and name (first part before @)
+            file_name_role = parts[0]
+            file_no, name = file_name_role.split('.', 1)
+            
+            # Extract role (second part)
+            role = parts[1] if len(parts) > 1 else ''
+            
+            # Extract zone if available (third part in new format)
+            zone = parts[2] if len(parts) > 2 else 'Lagos Zone 2'
+            
+            # Update the row
+            retrive_df.at[i, 'File No. Name'] = f"{file_no}.{name}"
+            retrive_df.at[i, 'Role'] = role
+            retrive_df.at[i, 'Zone'] = zone
+            
+        except Exception as e:
+            print(f"Error processing record {row['ID_Name_Role']}: {str(e)}")
+            continue
+    
+    return retrive_df[['ID_Name_Role', 'File No. Name', 'Role', 'Facial_features', 'Zone']]
 
 def load_logs(name, end=-1):
     logs_list = r.lrange(name, start=0, end=end)
@@ -174,9 +202,7 @@ class RealTimePrediction:
             self.logs['current_time'].append(current_time)
         
         return test_copy
-    
-### Registration Form
-    
+
 class RegistrationForm:
     def __init__(self):
         self.sample = 0
@@ -210,11 +236,10 @@ class RegistrationForm:
         
         return frame, embeddings
     
-    def save_data_in_redis_db(self, file_number, first_name, last_name, role):
+    def save_data_in_redis_db(self, file_number, first_name, last_name, role, zone='Lagos Zone 2'):
         if file_number is not None:
             if first_name.strip() != '':
-                key = f"{file_number}.{first_name}.{last_name}@{role}"
-
+                key = f"{file_number}.{first_name}.{last_name}@{role}@{zone}"
             else:
                 return 'false first_name'
         else:
@@ -236,13 +261,12 @@ class RegistrationForm:
         x_mean_bytes = x_mean.tobytes()
 
         # save into redis database
-        r.hset(name='staff:register',key=key,value=x_mean_bytes)
+        r.hset(name='staff:register', key=key, value=x_mean_bytes)
 
         os.remove('face_embedding.txt')
         self.reset()
         
-        return True 
-
+        return True
 
 class StaffMovement:
     def __init__(self):
@@ -397,3 +421,21 @@ class StaffDutyReport:
         self.reset()
         
         return True
+
+def migrate_redis_data():
+    """Migration function to add zone to existing records"""
+    # Retrieve all existing data
+    old_data = r.hgetall('staff:register')
+    
+    for key, value in old_data.items():
+        key_str = key.decode('utf-8')
+        # Check if the key already has zone information
+        if key_str.count('@') == 1:  # Old format without zone
+            # Add default zone
+            new_key = f"{key_str}@Lagos Zone 2"
+            # Update Redis with new key
+            r.hset('staff:register', new_key, value)
+            # Remove old key
+            r.hdel('staff:register', key)
+    
+    return "Migration completed successfully"

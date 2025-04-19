@@ -44,7 +44,7 @@ def video_frame_callback(frame):
         img,
         redis_face_db,
         'Facial_features',
-        ['File No. Name', 'Role'],
+        ['File No. Name', 'Role', 'Zone'],  # Added Zone to name_role
         thresh=0.5
     )
 

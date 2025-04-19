@@ -4,7 +4,6 @@ virtualenv/
 
 # Embedding & model files
 app/movement_embedding.txt
-app/insightface_model/
 
 # Bytecode and cache
 __pycache__/
